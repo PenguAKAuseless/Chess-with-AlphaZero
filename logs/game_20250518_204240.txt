@@ -1,0 +1,30 @@
+Opponent: stockfish
+AI Side: White
+Result: 0-1
+Moves:
+1. g2g3
+2. e7e5
+3. g1f3
+4. e5e4
+5. c2c4
+6. e4f3
+7. d2d3
+8. f8b4
+9. b1c3
+10. b4c3
+11. b2c3
+12. d7d6
+13. e2e4
+14. b8d7
+15. d3d4
+16. d8f6
+17. e1d2
+18. b7b6
+19. f1d3
+20. h7h5
+21. d2e3
+22. c8b7
+23. c1a3
+24. e8c8
+25. e4e5
+26. f6g5
