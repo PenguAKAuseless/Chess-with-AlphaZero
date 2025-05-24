@@ -1,18 +1,17 @@
-import pygame
-import chess
 import torch
-import numpy as np
+import chess
 import os
-import h5py
 from datetime import datetime
-import asyncio
-import platform
 
-# Neural Network Layers
+# Input Convolutional Layer
 class InputConvolutionalLayer(torch.nn.Module):
     def __init__(self, in_channels=103, out_channels=256):
         super().__init__()
-        self.conv = torch.nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1)
+        self.conv = torch.nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=3,
+            padding=1)
         self.bn = torch.nn.BatchNorm2d(num_features=out_channels)
         self.relu = torch.nn.ReLU(inplace=True)
 
@@ -30,6 +29,7 @@ class InputConvolutionalLayer(torch.nn.Module):
         self.bn.running_mean.data = torch.tensor(h5_group['bn_running_mean'][:])
         self.bn.running_var.data = torch.tensor(h5_group['bn_running_var'][:])
 
+# Residual Layer
 class ResidualLayer(torch.nn.Module):
     def __init__(self, channels=256):
         super().__init__()
@@ -65,6 +65,7 @@ class ResidualLayer(torch.nn.Module):
         self.bn2.running_mean.data = torch.tensor(h5_group['bn2_running_mean'][:])
         self.bn2.running_var.data = torch.tensor(h5_group['bn2_running_var'][:])
 
+# Value Head
 class ValueHead(torch.nn.Module):
     def __init__(self, in_channels, hidden_size):
         super(ValueHead, self).__init__()
@@ -94,6 +95,7 @@ class ValueHead(torch.nn.Module):
         self.fcl2.weight.data = torch.tensor(h5_group['fcl2_weight'][:])
         self.fcl2.bias.data = torch.tensor(h5_group['fcl2_bias'][:])
 
+# Policy Head
 class PolicyHead(torch.nn.Module):
     def __init__(self, channels=256):
         super().__init__()
@@ -120,6 +122,7 @@ class PolicyHead(torch.nn.Module):
         self.fcl.weight.data = torch.tensor(h5_group['fcl_weight'][:])
         self.fcl.bias.data = torch.tensor(h5_group['fcl_bias'][:])
 
+# Deep Neural Network
 class DeepNeuralNetwork(torch.nn.Module):
     def __init__(self, in_channels=103, out_channels=256, num_residual=10, hidden_size=256):
         super().__init__()
@@ -136,6 +139,7 @@ class DeepNeuralNetwork(torch.nn.Module):
         return self.value_head(value_x), self.policy_head(policy_x)
     
     def load_from_hdf5(self, filename):
+        import h5py
         with h5py.File(filename, 'r') as f:
             self.conv.load_from_hdf5(f['conv'])
             for i, residual in enumerate(self.residual_list):
@@ -143,6 +147,7 @@ class DeepNeuralNetwork(torch.nn.Module):
             self.value_head.load_from_hdf5(f['value_head'])
             self.policy_head.load_from_hdf5(f['policy_head'])
 
+# Chess State
 class ChessState:
     def __init__(self, board: chess.Board):
         self.board = board
@@ -162,7 +167,9 @@ class ChessState:
     def result(self):
         return self.board.result()
 
+# Board to Tensor Conversion
 def boards_to_tensor(history):
+    import numpy as np
     tensor = np.zeros((103, 8, 8), dtype=np.float32)
     piece_planes = {
         'P': 0, 'N': 1, 'B': 2, 'R': 3, 'Q': 4, 'K': 5,
@@ -186,6 +193,7 @@ def boards_to_tensor(history):
     tensor[102, :, :] = latest_board.fullmove_number / 100.0
     return tensor
 
+# Monte Carlo Tree Node
 class MonteCarloTreeNode:
     def __init__(self, state: ChessState, parent=None, prior=0.0):
         self.state = state
@@ -207,19 +215,21 @@ class MonteCarloTreeNode:
             next_state.apply_move(move)
             self.children[move] = MonteCarloTreeNode(next_state, parent=self, prior=prior)
 
+# Evaluator
 class Evaluator:
     def __init__(self, model, device='cpu'):
         self.model = model
         self.device = device
 
     def evaluate(self, history):
+        import torch.nn.functional as F
         tensor = boards_to_tensor(history)
         input_tensor = torch.tensor(tensor, dtype=torch.float32).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
             value, policy_logits = self.model(input_tensor)
 
-        policy = torch.nn.functional.softmax(policy_logits, dim=1).squeeze(0).cpu().numpy()
+        policy = F.softmax(policy_logits, dim=1).squeeze(0).cpu().numpy()
         value = value.item()
 
         legal_moves = history[-1].legal_moves()
@@ -281,6 +291,7 @@ class Evaluator:
                 raise ValueError(f"Invalid promotion position for move: {move}, from: {from_row},{from_col} to: {to_row},{to_col}")
         raise ValueError(f"Invalid or unsupported move for AlphaZero mapping: {move}")
 
+# Monte Carlo Search Tree
 class MonteCarloSearchTree:
     def __init__(self, evaluator, simulations=800, c_puct=1.0):
         self.evaluator = evaluator
@@ -288,6 +299,7 @@ class MonteCarloSearchTree:
         self.c_puct = c_puct
 
     def run(self, state: ChessState, history):
+        import numpy as np
         root = MonteCarloTreeNode(state=state)
         move_priors, value = self.evaluator.evaluate(history)
         root.expand(move_priors)
@@ -308,6 +320,7 @@ class MonteCarloSearchTree:
         return self.select_action(root)
 
     def select(self, node):
+        import numpy as np
         best_score = -float("inf")
         best_move = None
         best_child = None
@@ -320,6 +333,7 @@ class MonteCarloSearchTree:
         return best_move, best_child
 
     def ucb_score(self, parent, child):
+        import numpy as np
         q = child.value()
         u = self.c_puct * child.prior * (np.sqrt(parent.visits) / (1 + child.visits))
         return q + u
@@ -335,42 +349,96 @@ class MonteCarloSearchTree:
         move_visits.sort(key=lambda x: x[1], reverse=True)
         return move_visits[0][0]
 
-# Pygame-based Interactive Game
-async def main():
-    # Initialize Pygame
-    pygame.init()
-    FPS = 60
-    screen_width = 800
-    square_size = screen_width // 8
-    screen = pygame.display.set_mode((screen_width, screen_width))
-    pygame.display.set_caption("Chess vs AI")
-    clock = pygame.time.Clock()
+# Interactive Game Functions
+def get_valid_user_move(board):
+    while True:
+        try:
+            user_input = input("Enter your move (e.g., e2e4) or 'resign' to concede: ").strip().lower()
+            if user_input == 'resign':
+                return None
+            move = chess.Move.from_uci(user_input)
+            if move in board.legal_moves:
+                return move
+            else:
+                print("Invalid move. Please enter a legal move (e.g., e2e4).")
+        except ValueError:
+            print("Invalid input format. Use UCI notation (e.g., e2e4).")
 
-    # Load piece images (assuming you have piece images in a 'pieces' directory)
-    piece_images = {
-        'P': pygame.image.load('pieces/white-pawn.png').convert_alpha(),
-        'N': pygame.image.load('pieces/white-knight.png').convert_alpha(),
-        'B': pygame.image.load('pieces/white-bishop.png').convert_alpha(),
-        'R': pygame.image.load('pieces/white-rook.png').convert_alpha(),
-        'Q': pygame.image.load('pieces/white-queen.png').convert_alpha(),
-        'K': pygame.image.load('pieces/white-king.png').convert_alpha(),
-        'p': pygame.image.load('pieces/black-pawn.png').convert_alpha(),
-        'n': pygame.image.load('pieces/black-knight.png').convert_alpha(),
-        'b': pygame.image.load('pieces/black-bishop.png').convert_alpha(),
-        'r': pygame.image.load('pieces/black-rook.png').convert_alpha(),
-        'q': pygame.image.load('pieces/black-queen.png').convert_alpha(),
-        'k': pygame.image.load('pieces/black-king.png').convert_alpha(),
+def print_board(board):
+    piece_map = {
+        'P': '♙', 'N': '♘', 'B': '♗', 'R': '♖', 'Q': '♕', 'K': '♔',
+        'p': '♟', 'n': '♞', 'b': '♝', 'r': '♜', 'q': '♛', 'k': '♚'
     }
-    for key in piece_images:
-        piece_images[key] = pygame.transform.scale(piece_images[key], (square_size, square_size))
+    print("\n   +-----------------+")
+    for rank in range(7, -1, -1):
+        print(f" {rank + 1} |", end=" ")
+        for file in range(8):
+            square = chess.square(file, rank)
+            piece = board.piece_at(square)
+            symbol = piece_map.get(piece.symbol(), '.') if piece else '.'
+            print(symbol, end=" ")
+        print("|")
+    print("   +-----------------+")
+    print("     a b c d e f g h\n")
 
-    # Colors
-    LIGHT_SQUARE = (240, 217, 181)
-    DARK_SQUARE = (181, 136, 99)
-    HIGHLIGHT = (255, 255, 0, 100)  # Semi-transparent yellow
-    SELECTED = (0, 255, 0, 100)     # Semi-transparent green
+def log_game_result(log_dir, opponent, ai_side, result, moves):
+    os.makedirs(log_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = os.path.join(log_dir, f"game_{timestamp}.txt")
+    with open(filename, 'w') as f:
+        f.write(f"Opponent: {opponent}\n")
+        f.write(f"AI Side: {'White' if ai_side == chess.WHITE else 'Black'}\n")
+        f.write(f"Result: {result}\n")
+        f.write("Moves:\n")
+        for i, move in enumerate(moves, 1):
+            f.write(f"{i}. {move.uci()}\n")
+    print(f"Game result logged to {filename}")
 
+def play_against_user(model, device, ai_side, log_dir, checkpoint_dir="checkpoint"):
+    # Initialize model and evaluator
+    model.eval()
+    evaluator = Evaluator(model, device)
+    mcts = MonteCarloSearchTree(evaluator, simulations=800, c_puct=1.0)
+    
     # Initialize game
+    board = chess.Board()
+    state = ChessState(board)
+    history = [state.clone()]
+    moves = []
+    
+    print(f"AI plays as {'White' if ai_side == chess.WHITE else 'Black'}.")
+    print("Enter moves in UCI notation (e.g., e2e4). Type 'resign' to concede.")
+    
+    while not state.is_terminal():
+        print_board(state.board)
+        if state.board.turn == ai_side:
+            move = mcts.run(state, history)
+            print(f"AI move: {move.uci()}")
+        else:
+            move = get_valid_user_move(state.board)
+            if move is None:
+                print("You resigned.")
+                log_game_result(log_dir, "human", ai_side, "AI wins by resignation", moves)
+                return 'AI wins by resignation'
+        moves.append(move)
+        state.apply_move(move)
+        history.append(state.clone())
+        history = history[-8:]
+    
+    print_board(state.board)
+    result = state.result()
+    if result == '1-0':
+        winner = 'White' if ai_side == chess.BLACK else 'AI'
+    elif result == '0-1':
+        winner = 'Black' if ai_side == chess.WHITE else 'AI'
+    else:
+        winner = 'Draw'
+    print(f"Game over. Result: {result} ({winner})")
+    log_game_result(log_dir, "human", ai_side, f"{result} ({winner})", moves)
+    return result
+
+if __name__ == "__main__":
+    import random
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = DeepNeuralNetwork(in_channels=103, out_channels=256, num_residual=10, hidden_size=256).to(device)
     checkpoint_dir = "checkpoint"
@@ -385,143 +453,15 @@ async def main():
         model.load_from_hdf5(checkpoint_path)
     else:
         print("No checkpoints found. Please ensure a trained model checkpoint exists in the 'checkpoint' directory.")
-        pygame.quit()
-        return
-
-    model.eval()
-    evaluator = Evaluator(model, device)
-    mcts = MonteCarloSearchTree(evaluator, simulations=800, c_puct=1.0)
+        exit(1)
 
     # User chooses AI side
-    print("Choose AI side (white/black/random): ", end="")
-    side = input().strip().lower()
+    side = input("Choose AI side (white/black/random): ").strip().lower()
     while side not in ['white', 'black', 'random']:
         print("Invalid choice. Please choose 'white', 'black', or 'random'.")
-        print("Choose AI side (white/black/random): ", end="")
-        side = input().strip().lower()
+        side = input("Choose AI side (white/black/random): ").strip().lower()
 
     ai_side = chess.WHITE if side == 'white' else chess.BLACK if side == 'black' else random.choice([chess.WHITE, chess.BLACK])
-    print(f"AI plays as {'White' if ai_side == chess.WHITE else 'Black'}.")
-    print("Click to select a piece and its destination square. Press 'q' to resign.")
 
-    board = chess.Board()
-    state = ChessState(board)
-    history = [state.clone()]
-    moves = []
-    selected_square = None
-    legal_destinations = []
-    highlight_surface = pygame.Surface((square_size, square_size), pygame.SRCALPHA)
-
-    def draw_board():
-        for row in range(8):
-            for col in range(8):
-                color = LIGHT_SQUARE if (row + col) % 2 == 0 else DARK_SQUARE
-                pygame.draw.rect(screen, color, (col * square_size, row * square_size, square_size, square_size))
-                piece = board.piece_at(chess.square(col, 7 - row))
-                if piece:
-                    screen.blit(piece_images[piece.symbol()], (col * square_size, row * square_size))
-        if selected_square is not None:
-            col = chess.square_file(selected_square)
-            row = 7 - chess.square_rank(selected_square)
-            highlight_surface.fill(SELECTED)
-            screen.blit(highlight_surface, (col * square_size, row * square_size))
-            for dest in legal_destinations:
-                col = chess.square_file(dest)
-                row = 7 - chess.square_rank(dest)
-                highlight_surface.fill(HIGHLIGHT)
-                screen.blit(highlight_surface, (col * square_size, row * square_size))
-
-    def log_game_result(opponent, ai_side, result, moves):
-        os.makedirs(log_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = os.path.join(log_dir, f"game_{timestamp}.txt")
-        with open(filename, 'w') as f:
-            f.write(f"Opponent: {opponent}\n")
-            f.write(f"AI Side: {'White' if ai_side == chess.WHITE else 'Black'}\n")
-            f.write(f"Result: {result}\n")
-            f.write("Moves:\n")
-            for i, move in enumerate(moves, 1):
-                f.write(f"{i}. {move.uci()}\n")
-        print(f"Game result logged to {filename}")
-
-    # Game loop
-    running = True
-    game_over = False
-    while running:
-        if not game_over and state.board.turn == ai_side:
-            move = mcts.run(state, history)
-            print(f"AI move: {move.uci()}")
-            moves.append(move)
-            state.apply_move(move)
-            history.append(state.clone())
-            history = history[-8:]
-            selected_square = None
-            legal_destinations = []
-            if state.is_terminal():
-                game_over = True
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_q:
-                    print("You resigned.")
-                    log_game_result("human", ai_side, "AI wins by resignation", moves)
-                    running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN and not game_over and state.board.turn != ai_side:
-                x, y = event.pos
-                col = x // square_size
-                row = y // square_size
-                square = chess.square(col, 7 - row)
-                if selected_square is None:
-                    piece = board.piece_at(square)
-                    if piece and board.turn == piece.color:
-                        selected_square = square
-                        legal_destinations = [move.to_square for move in board.legal_moves if move.from_square == square]
-                else:
-                    if square in legal_destinations:
-                        move = chess.Move(selected_square, square)
-                        if board.piece_at(selected_square).piece_type == chess.PAWN and (chess.square_rank(square) == 0 or chess.square_rank(square) == 7):
-                            # Handle promotion (default to queen for simplicity)
-                            move = chess.Move(selected_square, square, promotion=chess.QUEEN)
-                        if move in board.legal_moves:
-                            moves.append(move)
-                            state.apply_move(move)
-                            history.append(state.clone())
-                            history = history[-8:]
-                            selected_square = None
-                            legal_destinations = []
-                            if state.is_terminal():
-                                game_over = True
-                        else:
-                            selected_square = None
-                            legal_destinations = []
-                    else:
-                        selected_square = None
-                        legal_destinations = []
-
-        draw_board()
-        if game_over:
-            result = state.result()
-            if result == '1-0':
-                winner = 'White' if ai_side == chess.BLACK else 'AI'
-            elif result == '0-1':
-                winner = 'Black' if ai_side == chess.WHITE else 'AI'
-            else:
-                winner = 'Draw'
-            print(f"Game over. Result: {result} ({winner})")
-            log_game_result("human", ai_side, f"{result} ({winner})", moves)
-            game_over = False  # Allow restarting or quitting
-
-        pygame.display.flip()
-        clock.tick(FPS)
-        if platform.system() == "Emscripten":
-            await asyncio.sleep(1.0 / FPS)
-
-    pygame.quit()
-
-if __name__ == "__main__":
-    if platform.system() == "Emscripten":
-        asyncio.ensure_future(main())
-    else:
-        asyncio.run(main())
+    # Play the game
+    result = play_against_user(model, device, ai_side, log_dir)
